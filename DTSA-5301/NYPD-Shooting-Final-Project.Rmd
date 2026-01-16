@@ -1,0 +1,196 @@
+---
+title: "A Look at NYPD Reported Murders Over Time: 2006 - 2024"
+date: "2026-01-16"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+For this project, I am interested in looking at how the number of murders in New York City (NYC) changes from 2006 to 2024. To investigate this question, we will import and tidy data on historic shootings provided by the New York City Police Department, visualize and analyze the changes to the data over time, and conclude with a discussion of next steps and bias mitigation.
+
+
+## Import data
+
+First we will read in a CSV file containing the historic data on NYPD shootings.
+
+```{r import_libraries}
+library("tidyverse")
+library("lubridate")
+```
+
+```{r import_data}
+# Define URL and read in CSV file
+url <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv"
+nypd_data <- read_csv(url)
+```
+
+We can view a summary of the data upon first import, before we do any tidying.
+
+```{r import_data_summary}
+# Print a summary of the data
+summary(nypd_data)
+```
+
+## Tidy and Transform
+
+Next, we will tidy and transform the data and then re-check a summary of the data and complete sanity checks before proceeding further.
+
+```{r tidy_data}
+# Change appropriate variables to factor and date types
+
+# Change the data column to a date object (the time column is already a time object)
+nypd_data <- nypd_data %>%
+              mutate(OCCUR_DATE = mdy(OCCUR_DATE))
+
+# Define the factors
+col_names <- sapply(nypd_data, function(col) length(unique(col)) < 15 & !is.logical(col))
+nypd_data <- nypd_data %>%
+  mutate(across(names(col_names)[col_names], as.factor))
+
+# Get rid of any columns not needed
+nypd_data <- nypd_data %>%
+              select(-c(Latitude, Longitude, Lon_Lat, X_COORD_CD, Y_COORD_CD))
+
+# Check the data summary again
+summary(nypd_data)
+```
+
+As we take a look at the data after it's been tidied, we can do some initial assessments.
+
+- The data ranges from 2006 to 2024 and time from 0:00 to 24:00, which is all logical.
+- All 5 boroughs are included, though we do not know if some may be over or underrepresented.
+- Confirmed that even though there are only 78 police precincts in New York City, their numbers do in fact go up to 123 (some numbers are skipped), so this column does make sense.
+- The 2 columns that track age groups include some illogical numbers (e.g. 1028, 1020, 940, 1022, etc). This would need to be investigated more, however it is not data that we are including in this report's analysis.
+
+### Missing Data
+
+There are several columns that are missing data for some incidents. These include the classification and description of where the shootings occurred, and the age group, race, and sex of the people involved. A few of these columns contain missing data formatted with multiple different undefined terms, including "null", "NA", and "Unknown" all in the same column. We could deal with these values by converting them all to the same undefined term, but before doing this I would want to first read through any documentation on the data set to see if the different terms refer to different information that we may want to use. 
+
+However, with all that being said, these instances of missing data do not apply to any of the columns used for the analysis in this report, so I feel confident moving forward with my analysis.
+
+
+## Visualizations and Analysis
+
+We can start the analysis of how the murders in NYC changes over time by first producing a basic plot of the number of murders per day.
+
+```{r num_murders_per_day}
+# Group rows by date and summarize by summing the number of murder flags
+nypd_data %>% 
+  group_by(OCCUR_DATE) %>%
+  summarize(MURDERS = sum(STATISTICAL_MURDER_FLAG)) %>%
+  ungroup() %>%
+  ggplot(aes(x = OCCUR_DATE, y = MURDERS)) + 
+  geom_line(aes(color = "Murders"), show.legend = FALSE) +
+  labs(title="Murders in NYC Per Day", x="Date Occured", y="Number of Murders") +
+  theme(plot.title = element_text(size=15, hjust = 0.5))
+```
+
+It might be easier to see trends over the time period by grouping our crimes into months instead of days, so we'll plot this as well.
+
+```{r num_murders_per_month}
+# Groups all dates in the same month by the first day of that month 
+# and summarize by summing the number of murder flags
+nypd_data_months <- nypd_data %>% 
+    mutate(OCCUR_MONTH = floor_date(OCCUR_DATE, "month")) %>%
+    group_by(OCCUR_MONTH) %>%
+    summarize(MURDERS = sum(STATISTICAL_MURDER_FLAG)) %>%
+    ungroup() %>%
+    select(OCCUR_MONTH, MURDERS, everything()) 
+
+# Plot
+nypd_data_months %>%
+  ggplot(aes(x = OCCUR_MONTH, y = MURDERS)) + 
+  geom_line(aes(color = "Murders"), show.legend = FALSE) +
+  labs(title="Murders in NYC Per Month", x="Month Occured", y="Number of Murders") +
+  theme(plot.title = element_text(size=15, hjust = 0.5))
+```
+
+From this plot we can see more trends emerge. One that jumps out is an overall decrease in murders from around 2013 through 2020. Next, we can check to see if there is any overall trend to the number of murders per month by applying a linear model to the data.
+
+```{r murders_model}
+# Create a linear model based on the data
+model <- lm(MURDERS ~ OCCUR_MONTH, data = nypd_data_months)
+summary(model)
+```
+
+```{r murders_model_plot}
+# Apply our model and plot actual vs modeled data
+nypd_data_modeled <- nypd_data_months %>% mutate(MODELED = predict(model))
+
+nypd_data_modeled %>% ggplot() + 
+    geom_line(aes(x = OCCUR_MONTH, y = MURDERS), color = "red") + 
+    geom_line(aes(x = OCCUR_MONTH, y = MODELED), color = "blue") +
+    labs(title="Murders in NYC Per Month with Linear Model", 
+         x="Month Occured", y="Number of Murders") +
+    theme(plot.title = element_text(size=15, hjust = 0.5))
+```
+
+It's obvious that this data is not perfectly fit by a linear model. However, it can provide some initial insight that the overall number of reported murders in New York City has decreased over the time period this data covers. According to our model, at the start of our data in January 2006, the average number of murders as approximately 30 per month, and by the end of our data in December 2024 that number dropped to approximately 20 per month.
+
+To dive slightly deeper, I decided to next look at how the number of murders varies for each month. To do this, I plotted the number of murders for each month across the years, and fit each of these with their own models.
+
+```{r murders_model_months_plots}
+# Add a column for the month name only
+nypd_data_by_month <- nypd_data_months %>% mutate(MONTH = month(OCCUR_MONTH))
+
+# Create number to name vector for labeller
+month_names <- c(month.name)
+names(month_names) <- c(1:12)
+
+# Create models for each month
+model_data <- nypd_data_by_month %>%
+  group_by(MONTH) %>%
+  do({
+    model <- lm(MURDERS ~ OCCUR_MONTH, data = .)
+    data.frame(
+      OCCUR_MONTH = seq(min(.$OCCUR_MONTH), max(.$OCCUR_MONTH), by="year"),
+      MURDERS = predict(model, newdata = data.frame(OCCUR_MONTH = 
+                                                      seq(min(.$OCCUR_MONTH), 
+                                                          max(.$OCCUR_MONTH), 
+                                                          by="year")))
+    )
+  }) %>%
+  ungroup()
+
+# Plot data and models for each month
+ggplot(nypd_data_by_month, aes(x = OCCUR_MONTH, y = MURDERS)) + 
+    geom_line(color = "red") + 
+    labs(x = "Year", y = "Number of Murders") +
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) +
+    facet_wrap(~ MONTH, nrow = 4, labeller = labeller(MONTH = month_names)) + 
+    geom_line(data=model_data, color = "blue") + 
+    labs(title="Murders in NYC By Month") + 
+    theme(plot.title = element_text(size=15, hjust = 0.5))
+```
+
+From these plots, you can see the differences in the total number of murders for certain months. According to the model, on average January has a lower total number of murders than September. You can also see that there are differences in how the data is trending. For example, October, November, and December have had their number of murders decrease over the time period, while January, February, and March have mostly stayed the same over the years. You can also see that some months like May and September have had larger oscillations in their numbers over the years.
+
+Looking back at the graph that included all the months together, there was a large dip in murders from 2013-2020. However, comparing that trend to these month by month plots shows that this dip isn't apparent in all the months individually. It seems like that overall dip might have been more influenced by the numbers in July and September than some other months like January. This could help us narrow down what happened in New York to cause this multi-year dip. For example, maybe there were programs in place during these months that helped decrease the overall murder rate. 
+
+## Conclusion
+
+In this project, we imported our data in a reproducible manner, tidied it and performed sanity checks to ensure its validity, and then did analysis in order to answer the question of how the number of murders in New York City are changing over time. Through plotting and modeling the data, we found that the number of murders in New York City do appear to have decreased from 2006 to 2024. We also found the trends varied greatly when examining each month individually. However, both these conclusions were found through a simple procedure and much more work can be done to better understand the data.
+
+### Additional Questions
+
+When thinking about next steps to investigate the data, there are plenty of other ideas that could be explored. For example, it would be interesting to look at if a non-linear model could fit more of the trends of this data. Also, it is reported that the data set counts shootings that killed multiple people as different shootings, so it would be interesting to see if any features in the data change when you combine these multi-victim shooting instances.
+
+### Bias Identification
+
+When identifying bias in this report, its good to look at both the biases present in the data, and my own personal biases. 
+
+Looking at bias in the data that could affect our analysis, an important thing to note is that the data only includes crimes that police are aware of and investigate. This data set could potentially be missing crimes where victims, families, or witnesses would not want to talk with the police, such as those involving immigrants or other marginalized groups with histories of distrust in the police. Therefore, when using this data set, we cannot make assumptions about crime in New York City in general - only reported crime.
+
+My own personal bias could also impact the conclusions we draw from this data. For example, I have never lived in New York City and this could impact my understanding of the best ways to group this data. Perhaps things like weather and local events would be more useful to group the data by than months, but I don’t know that. I am biased by my experiences in my own city and am potentially applying those experiences to New York without taking into account how they may be different. 
+
+There is also bias in what I have chosen to research in the first place. I intentionally chose not to analyze anything involving the race of the perpetrators and victims because as a white person, I know that I will always be under-informed about issues of race and policing in America and wanted to avoid any misunderstandings from my own lack of knowledge. However, this is still bias and clearly not a long term solution as these topics need to be studied.
+
+
+## Session Info
+```{r session_info}
+sessionInfo()
+```
